@@ -32,11 +32,6 @@ bool Display::isAvailable()
   return _isAvailable;
 }
 
-void Display::loop()
-{
-  _display->display();
-}
-
 void Display::showSensorPPO2(float ppO2, uint8_t sensorChannel)
 {
   if (!isAvailable())
@@ -60,16 +55,18 @@ void Display::showSensorPPO2(float ppO2, uint8_t sensorChannel)
   _display->display();
 }
 
-void Display::showDisplayMessage(String message)
+void Display::showCenteredMessage(String message)
 {
   if (!isAvailable())
     return;
 
+  _display->setTextWrap(false);
+  _display->setTextColor(WHITE);
+
   _display->clearDisplay();
 
-  _display->setTextSize(2);
-  _display->setTextColor(WHITE);
-  _display->setCursor(0, 10);
-
-  _display->println(message);
+  _display->setFont(&FreeMonoBold9pt7b);
+  _display->setCursor(0, SCREEN_HEIGHT / 2);
+  _display->print(message);
+  _display->display();
 }

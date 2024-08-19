@@ -15,11 +15,10 @@ class Display {
   Display(logging::Logger *logger);
 
   void setup();
-  void loop();
   bool isAvailable();
 
   void showSensorPPO2(float ppO2, uint8_t sensorChannel);
-  void showDisplayMessage(String message);
+  void showCenteredMessage(String message);
 
   private:
   bool _isAvailable;

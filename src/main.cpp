@@ -15,6 +15,7 @@
 
 #include "ISensor.h"
 #include "O2VoltageSensor.h"
+#include "CalibratedPPO2Read.h"
 
 #define ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL 1.01325 // SW does 1.016mb
 
@@ -45,14 +46,20 @@ ISensor<float> *o2VoltageSensor1 = new O2VoltageSensor(&logger, &ads, 0);
 ISensor<float> *o2VoltageSensor2 = new O2VoltageSensor(&logger, &ads, 1);
 ISensor<float> *o2VoltageSensor3 = new O2VoltageSensor(&logger, &ads, 2);
 
-float calibrationVoltage = 52.5;
+// Create CalibratedPPO2Read objects with the O2VoltageSensor objects
+CalibratedPPO2Read *calibratedPPO2Read1 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor1);
+CalibratedPPO2Read *calibratedPPO2Read2 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor2);
+CalibratedPPO2Read *calibratedPPO2Read3 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor3);
+
+// Take calibration references
 
 uint8_t displaySensorChannel = 1;
 
-float getPPO2FromVoltage(float currentCellVoltage)
-{
-  return ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL * currentCellVoltage / calibrationVoltage;
+namespace UI {
+  enum Page {calibratingPage, rotatingSensorsPage};
 }
+
+UI::Page currentUIPage = UI::rotatingSensorsPage;
 
 Task checkButtons(TASK_IMMEDIATE, TASK_FOREVER, []() {
   button.check();
@@ -78,18 +85,27 @@ Task checkWetContact(TASK_IMMEDIATE, TASK_FOREVER, []() {
   }
 }, &scheduler, true);
 
-Task endBeepTask(TASK_IMMEDIATE, 1, []() {
+Task endCalibrationTask(TASK_IMMEDIATE, 1, []() {
+  currentUIPage = UI::rotatingSensorsPage;
   digitalWrite(BUZZER_PIN, LOW);
 }, &scheduler);
 
-Task beginBeepTask(TASK_IMMEDIATE, 1, []() {
+Task beginCalibrationTask(TASK_IMMEDIATE, 1, []() {
+  currentUIPage = UI::calibratingPage;
   digitalWrite(BUZZER_PIN, HIGH);
+
+  calibratedPPO2Read1->takeCalibrationReference();
+  calibratedPPO2Read2->takeCalibrationReference();
+  calibratedPPO2Read3->takeCalibrationReference();
+
+  endCalibrationTask.restartDelayed(500);
 }, &scheduler);
 
-Task showSensorsPpO2Task(TASK_IMMEDIATE, TASK_FOREVER, []() {
+
+void displayRotatingSensorsPage () {
   if(displaySensorChannel == 3) {
     display.showSensorPPO2(
-      getPPO2FromVoltage(o2VoltageSensor3->read()),
+      calibratedPPO2Read3->getPPO2(),
       displaySensorChannel
     );
     return;
@@ -97,7 +113,7 @@ Task showSensorsPpO2Task(TASK_IMMEDIATE, TASK_FOREVER, []() {
 
   if(displaySensorChannel == 2) {
     display.showSensorPPO2(
-      getPPO2FromVoltage(o2VoltageSensor2->read()),
+      calibratedPPO2Read2->getPPO2(),
       displaySensorChannel
     );
     return;
@@ -105,9 +121,21 @@ Task showSensorsPpO2Task(TASK_IMMEDIATE, TASK_FOREVER, []() {
 
   if(displaySensorChannel == 1) {
     display.showSensorPPO2(
-      getPPO2FromVoltage(o2VoltageSensor1->read()),
+      calibratedPPO2Read1->getPPO2(),
       displaySensorChannel
     );
+    return;
+  }
+}
+
+Task displayUITask(TASK_IMMEDIATE, TASK_FOREVER, []() {
+  if(currentUIPage == UI::rotatingSensorsPage) {
+    displayRotatingSensorsPage();
+    return;
+  }
+
+  if(currentUIPage == UI::calibratingPage) {
+    display.showCenteredMessage("Calibrating");
     return;
   }
 }, &scheduler, true);
@@ -136,8 +164,6 @@ void handleEvent(AceButton * /* button */, uint8_t eventType,
         logging::LoggerLevel::LOGGER_LEVEL_INFO,
         "TOUCH_SENSOR",
         "Pressed");
-        beginBeepTask.restart();
-        endBeepTask.restartDelayed(1000);
     break;
   case AceButton::kEventReleased:
     logger.log(
@@ -156,6 +182,7 @@ void handleEvent(AceButton * /* button */, uint8_t eventType,
         logging::LoggerLevel::LOGGER_LEVEL_INFO,
         "TOUCH_SENSOR",
         "Double Clicked");
+    beginCalibrationTask.restart();
     break;
   }
 }
