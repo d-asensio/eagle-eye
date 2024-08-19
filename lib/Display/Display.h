@@ -18,7 +18,7 @@ class Display {
   void loop();
   bool isAvailable();
 
-  void showPPO2(float sensor1ppO2, float sensor2ppO2, float sensor3ppO2);
+  void showSensorPPO2(float ppO2, uint8_t sensorChannel);
   void showDisplayMessage(String message);
 
   private:

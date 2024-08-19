@@ -24,48 +24,126 @@
 
 #define WET_CONTACT_PIN (26)
 
-#define PIEZO_ELECTRIC_SWITCH_PIN (33)
+#define BUTTON_SWITCH_PIN (33)
 
-#define BUZZER_PIN (12)
+#define BUZZER_PIN (25)
 
-#define TOUCHPAD_FILTER_TOUCH_PERIOD (30)
-#define TOUCHPAD_TOUCH_THRESHOLD (200)
+using namespace ace_button;
 
 logging::Logger logger;
 Scheduler scheduler;
 
-using namespace ace_button;
+AceButton button;
 
-class CapacitiveConfig : public ButtonConfig
+Display display(&logger);
+
+RTC_DS3231 rtc;
+RTCTime rtcTime(&logger, &rtc);
+
+Adafruit_ADS1115 ads;
+ISensor<float> *o2VoltageSensor1 = new O2VoltageSensor(&logger, &ads, 0);
+ISensor<float> *o2VoltageSensor2 = new O2VoltageSensor(&logger, &ads, 1);
+ISensor<float> *o2VoltageSensor3 = new O2VoltageSensor(&logger, &ads, 2);
+
+float calibrationVoltage = 52.5;
+
+uint8_t displaySensorChannel = 1;
+
+float getPPO2FromVoltage(float currentCellVoltage)
 {
-public:
-  CapacitiveConfig(touch_pad_t touchPad) : mTouchPad(touchPad) {}
+  return ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL * currentCellVoltage / calibrationVoltage;
+}
 
-protected:
-  int readButton(uint8_t /*pin*/) override
-  {
-    touch_value_t touchPadValue;
-    touch_pad_read_raw_data(mTouchPad, &touchPadValue);
+Task checkButtons(TASK_IMMEDIATE, TASK_FOREVER, []() {
+  button.check();
+}, &scheduler, true);
 
-    // Serial.println(touchPadValue);
+Task checkSensors(TASK_IMMEDIATE, TASK_FOREVER, []() {
+  o2VoltageSensor1->loop();
+  o2VoltageSensor2->loop();
+  o2VoltageSensor3->loop();
+}, &scheduler, true);
 
-    return touchPadValue < TOUCHPAD_TOUCH_THRESHOLD ? LOW : HIGH;
+Task checkWetContact(TASK_IMMEDIATE, TASK_FOREVER, []() {
+  boolean isWet = digitalRead(WET_CONTACT_PIN) == HIGH;
+
+  if (isWet) {
+    analogWrite(BUDDY_LED_R_PIN, 0);
+    analogWrite(BUDDY_LED_G_PIN, 0);
+    analogWrite(BUDDY_LED_B_PIN, 255);
+  } else {
+    analogWrite(BUDDY_LED_R_PIN, 255);
+    analogWrite(BUDDY_LED_G_PIN, 0);
+    analogWrite(BUDDY_LED_B_PIN, 0);
+  }
+}, &scheduler, true);
+
+Task endBeepTask(TASK_IMMEDIATE, 1, []() {
+  digitalWrite(BUZZER_PIN, LOW);
+}, &scheduler);
+
+Task beginBeepTask(TASK_IMMEDIATE, 1, []() {
+  digitalWrite(BUZZER_PIN, HIGH);
+}, &scheduler);
+
+Task showSensorsPpO2Task(TASK_IMMEDIATE, TASK_FOREVER, []() {
+  if(displaySensorChannel == 3) {
+    display.showSensorPPO2(
+      getPPO2FromVoltage(o2VoltageSensor3->read()),
+      displaySensorChannel
+    );
+    return;
   }
 
-private:
-  touch_pad_t mTouchPad;
-};
+  if(displaySensorChannel == 2) {
+    display.showSensorPPO2(
+      getPPO2FromVoltage(o2VoltageSensor2->read()),
+      displaySensorChannel
+    );
+    return;
+  }
+
+  if(displaySensorChannel == 1) {
+    display.showSensorPPO2(
+      getPPO2FromVoltage(o2VoltageSensor1->read()),
+      displaySensorChannel
+    );
+    return;
+  }
+}, &scheduler, true);
+
+Task rotateSensorsPpO2Task(1000, TASK_FOREVER, []() {
+  displaySensorChannel++;
+
+  if(displaySensorChannel > 3) {
+    displaySensorChannel = 1;
+  }
+}, &scheduler, true);
 
 void handleEvent(AceButton * /* button */, uint8_t eventType,
                  uint8_t /* buttonState */)
 {
   switch (eventType)
   {
+  case AceButton::kEventLongPressed:
+    logger.log(
+        logging::LoggerLevel::LOGGER_LEVEL_INFO,
+        "TOUCH_SENSOR",
+        "Long Pressed");
+    break;
   case AceButton::kEventPressed:
     logger.log(
         logging::LoggerLevel::LOGGER_LEVEL_INFO,
         "TOUCH_SENSOR",
         "Pressed");
+        beginBeepTask.restart();
+        endBeepTask.restartDelayed(1000);
+    break;
+  case AceButton::kEventReleased:
+    logger.log(
+        logging::LoggerLevel::LOGGER_LEVEL_INFO,
+        "TOUCH_SENSOR",
+        "Released");
     break;
   case AceButton::kEventClicked:
     logger.log(
@@ -82,57 +160,12 @@ void handleEvent(AceButton * /* button */, uint8_t eventType,
   }
 }
 
-CapacitiveConfig buttonConfig(TOUCH_PAD_NUM2);
-AceButton button(&buttonConfig);
-
-Display display(&logger);
-
-RTC_DS3231 rtc;
-RTCTime rtcTime(&logger, &rtc);
-
-Adafruit_ADS1115 ads;
-ISensor<float> *o2VoltageSensor1 = new O2VoltageSensor(&logger, &ads, 0);
-ISensor<float> *o2VoltageSensor2 = new O2VoltageSensor(&logger, &ads, 1);
-ISensor<float> *o2VoltageSensor3 = new O2VoltageSensor(&logger, &ads, 2);
-
-float calibrationVoltage = 52.5;
-
-float getPPO2FromVoltage(float currentCellVoltage)
-{
-  return ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL * currentCellVoltage / calibrationVoltage;
-}
-
-void t1Callback() {
-  Serial.print("t1: ");
-  Serial.println(millis());
-}
-
-Task t1(2000, 10, &t1Callback);
-
 void setup()
 {
   Serial.begin(115200);
   logger.setSerial(&Serial);
-  
-  scheduler.init();
-  scheduler.addTask(t1);
-  
-  t1.enable();
 
-  // Initialize touch pad peripheral.
-  touch_pad_init();
-  touch_pad_set_fsm_mode(TOUCH_FSM_MODE_TIMER);
-  touch_pad_set_voltage(TOUCH_HVOLT_2V7, TOUCH_LVOLT_0V5, TOUCH_HVOLT_ATTEN_1V);
-  touch_pad_config(TOUCH_PAD_NUM2, TOUCHPAD_TOUCH_THRESHOLD);
-  touch_pad_intr_enable();
-
-  // Initialize and start a software filter to detect valid touch pad events
-  touch_pad_filter_start(TOUCHPAD_FILTER_TOUCH_PERIOD);
-
-  // Configure the button using CapacitiveConfig.
-  buttonConfig.setFeature(ButtonConfig::kFeatureClick);
-  buttonConfig.setFeature(ButtonConfig::kFeatureDoubleClick);
-  buttonConfig.setEventHandler(handleEvent);
+  // --
 
   display.setup();
   rtcTime.setup();
@@ -148,86 +181,22 @@ void setup()
   pinMode(BUZZER_PIN, OUTPUT);
 
   pinMode(WET_CONTACT_PIN, INPUT_PULLDOWN);
-
-  pinMode(PIEZO_ELECTRIC_SWITCH_PIN, INPUT_PULLDOWN);
-}
-
-void loop()
-{
-  o2VoltageSensor1->loop();
-  o2VoltageSensor2->loop();
-  o2VoltageSensor3->loop();
-
-  float o2Sensor1Voltage = o2VoltageSensor1->read();
-  float o2Sensor2Voltage = o2VoltageSensor2->read();
-  float o2Sensor3Voltage = o2VoltageSensor3->read();
-
-  // rtcTime.serialPrintDateTime();
-  // Serial.print(" - ");
-
-  // Serial.print("(");
-  // Serial.print(o2Sensor1Voltage);
-  // Serial.print(")");
-
-  // Serial.print(" ");
-
-  // Serial.print("(");
-  // Serial.print(o2Sensor2Voltage);
-  // Serial.print(")");
-
-  // Serial.print(" ");
-
-  // Serial.print("(");
-  // Serial.print(o2Sensor3Voltage);
-  // Serial.println(")");
-
-  display.showPPO2(
-      getPPO2FromVoltage(o2Sensor1Voltage),
-      getPPO2FromVoltage(o2Sensor2Voltage),
-      getPPO2FromVoltage(o2Sensor3Voltage));
+  pinMode(BUTTON_SWITCH_PIN, INPUT_PULLDOWN);
 
   // ---
 
-  boolean isWet = digitalRead(WET_CONTACT_PIN) == HIGH;
+  button.init(BUTTON_SWITCH_PIN, LOW);
 
-  if (isWet) {
-    analogWrite(BUDDY_LED_R_PIN, 0);
-    analogWrite(BUDDY_LED_G_PIN, 0);
-    analogWrite(BUDDY_LED_B_PIN, 255);
-  } else {
-    analogWrite(BUDDY_LED_R_PIN, 255);
-    analogWrite(BUDDY_LED_G_PIN, 0);
-    analogWrite(BUDDY_LED_B_PIN, 0);
-  }
+  ButtonConfig* buttonConfig = button.getButtonConfig();
+  buttonConfig->setEventHandler(handleEvent);
+  buttonConfig->setFeature(ButtonConfig::kFeatureClick);
+  buttonConfig->setFeature(ButtonConfig::kFeatureDoubleClick);
+  buttonConfig->setFeature(ButtonConfig::kFeatureLongPress);
+  buttonConfig->setFeature(ButtonConfig::kFeatureRepeatPress);
 
-  // ----
+  // ---
 
-  boolean isPiezoActive = digitalRead(PIEZO_ELECTRIC_SWITCH_PIN) == HIGH;
-
-  if (isPiezoActive) {
-    digitalWrite(BUZZER_PIN, HIGH);
-  } else {
-    digitalWrite(BUZZER_PIN, LOW);
-  }
-
-  // ----
-
-  display.loop();
-
-  // ----
-
-  scheduler.execute();
-
-  // ----
-
-  unsigned long start = millis();
-  button.check();
-
-  // check on performance in milliseconds
-  unsigned long duration = millis() - start;
-  if (duration > 10)
-  {
-    Serial.print("duration: ");
-    Serial.println(duration);
-  }
+  scheduler.startNow();
 }
+
+void loop() { scheduler.execute(); }
