@@ -19,6 +19,7 @@ class Display {
 
   void showSensorPPO2(float ppO2, uint8_t sensorChannel);
   void showCenteredMessage(String message);
+  void off();
 
   private:
   bool _isAvailable;

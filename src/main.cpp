@@ -19,15 +19,15 @@
 
 #define ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL 1.01325 // SW does 1.016mb
 
-#define BUDDY_LED_R_PIN (18)
-#define BUDDY_LED_G_PIN (19)
-#define BUDDY_LED_B_PIN (17)
+#define BUDDY_LED_R_PIN (GPIO_NUM_18)
+#define BUDDY_LED_G_PIN (GPIO_NUM_19)
+#define BUDDY_LED_B_PIN (GPIO_NUM_17)
 
-#define WET_CONTACT_PIN (26)
+#define WET_CONTACT_PIN (GPIO_NUM_26)
 
-#define BUTTON_SWITCH_PIN (33)
+#define BUTTON_SWITCH_PIN (GPIO_NUM_33)
 
-#define BUZZER_PIN (25)
+#define BUZZER_PIN (GPIO_NUM_25)
 
 using namespace ace_button;
 
@@ -158,6 +158,10 @@ void handleEvent(AceButton * /* button */, uint8_t eventType,
         logging::LoggerLevel::LOGGER_LEVEL_INFO,
         "TOUCH_SENSOR",
         "Long Pressed");
+      display.showCenteredMessage("Bye");  
+      delay(1500);
+      display.off();  
+      esp_deep_sleep_start();
     break;
   case AceButton::kEventPressed:
     logger.log(
@@ -220,6 +224,10 @@ void setup()
   buttonConfig->setFeature(ButtonConfig::kFeatureDoubleClick);
   buttonConfig->setFeature(ButtonConfig::kFeatureLongPress);
   buttonConfig->setFeature(ButtonConfig::kFeatureRepeatPress);
+
+  // ---
+
+  esp_sleep_enable_ext0_wakeup(WET_CONTACT_PIN, HIGH);
 
   // ---
 

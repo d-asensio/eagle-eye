@@ -23,6 +23,7 @@ void Display::setup()
   }
 
   _display->setRotation(2);
+  _display->dim(true);
 
   _isAvailable = true;
 }
@@ -68,5 +69,14 @@ void Display::showCenteredMessage(String message)
   _display->setFont(&FreeMonoBold9pt7b);
   _display->setCursor(0, SCREEN_HEIGHT / 2);
   _display->print(message);
+  _display->display();
+}
+
+void Display::off()
+{
+  if (!isAvailable())
+    return;
+
+  _display->clearDisplay();
   _display->display();
 }
