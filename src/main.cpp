@@ -2,9 +2,13 @@
 #include <Wire.h>
 
 #include <logger.h>
+#include <TaskScheduler.h>
 
 #include <RTClib.h>
 #include <Adafruit_ADS1X15.h>
+
+#include <AceButton.h>
+#include "driver/touch_sensor.h"
 
 #include "Display.h"
 #include "RTCTime.h"
@@ -12,8 +16,74 @@
 #include "ISensor.h"
 #include "O2VoltageSensor.h"
 
-logging::Logger logger;
+#define ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL 1.01325 // SW does 1.016mb
 
+#define BUDDY_LED_R_PIN (18)
+#define BUDDY_LED_G_PIN (19)
+#define BUDDY_LED_B_PIN (17)
+
+#define WET_CONTACT_PIN (26)
+
+#define PIEZO_ELECTRIC_SWITCH_PIN (33)
+
+#define BUZZER_PIN (12)
+
+#define TOUCHPAD_FILTER_TOUCH_PERIOD (30)
+#define TOUCHPAD_TOUCH_THRESHOLD (200)
+
+logging::Logger logger;
+Scheduler scheduler;
+
+using namespace ace_button;
+
+class CapacitiveConfig : public ButtonConfig
+{
+public:
+  CapacitiveConfig(touch_pad_t touchPad) : mTouchPad(touchPad) {}
+
+protected:
+  int readButton(uint8_t /*pin*/) override
+  {
+    touch_value_t touchPadValue;
+    touch_pad_read_raw_data(mTouchPad, &touchPadValue);
+
+    // Serial.println(touchPadValue);
+
+    return touchPadValue < TOUCHPAD_TOUCH_THRESHOLD ? LOW : HIGH;
+  }
+
+private:
+  touch_pad_t mTouchPad;
+};
+
+void handleEvent(AceButton * /* button */, uint8_t eventType,
+                 uint8_t /* buttonState */)
+{
+  switch (eventType)
+  {
+  case AceButton::kEventPressed:
+    logger.log(
+        logging::LoggerLevel::LOGGER_LEVEL_INFO,
+        "TOUCH_SENSOR",
+        "Pressed");
+    break;
+  case AceButton::kEventClicked:
+    logger.log(
+        logging::LoggerLevel::LOGGER_LEVEL_INFO,
+        "TOUCH_SENSOR",
+        "Clicked");
+    break;
+  case AceButton::kEventDoubleClicked:
+    logger.log(
+        logging::LoggerLevel::LOGGER_LEVEL_INFO,
+        "TOUCH_SENSOR",
+        "Double Clicked");
+    break;
+  }
+}
+
+CapacitiveConfig buttonConfig(TOUCH_PAD_NUM2);
+AceButton button(&buttonConfig);
 
 Display display(&logger);
 
@@ -25,9 +95,44 @@ ISensor<float> *o2VoltageSensor1 = new O2VoltageSensor(&logger, &ads, 0);
 ISensor<float> *o2VoltageSensor2 = new O2VoltageSensor(&logger, &ads, 1);
 ISensor<float> *o2VoltageSensor3 = new O2VoltageSensor(&logger, &ads, 2);
 
-void setup() {
+float calibrationVoltage = 52.5;
+
+float getPPO2FromVoltage(float currentCellVoltage)
+{
+  return ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL * currentCellVoltage / calibrationVoltage;
+}
+
+void t1Callback() {
+  Serial.print("t1: ");
+  Serial.println(millis());
+}
+
+Task t1(2000, 10, &t1Callback);
+
+void setup()
+{
   Serial.begin(115200);
   logger.setSerial(&Serial);
+  
+  scheduler.init();
+  scheduler.addTask(t1);
+  
+  t1.enable();
+
+  // Initialize touch pad peripheral.
+  touch_pad_init();
+  touch_pad_set_fsm_mode(TOUCH_FSM_MODE_TIMER);
+  touch_pad_set_voltage(TOUCH_HVOLT_2V7, TOUCH_LVOLT_0V5, TOUCH_HVOLT_ATTEN_1V);
+  touch_pad_config(TOUCH_PAD_NUM2, TOUCHPAD_TOUCH_THRESHOLD);
+  touch_pad_intr_enable();
+
+  // Initialize and start a software filter to detect valid touch pad events
+  touch_pad_filter_start(TOUCHPAD_FILTER_TOUCH_PERIOD);
+
+  // Configure the button using CapacitiveConfig.
+  buttonConfig.setFeature(ButtonConfig::kFeatureClick);
+  buttonConfig.setFeature(ButtonConfig::kFeatureDoubleClick);
+  buttonConfig.setEventHandler(handleEvent);
 
   display.setup();
   rtcTime.setup();
@@ -35,97 +140,20 @@ void setup() {
   o2VoltageSensor1->setup();
   o2VoltageSensor2->setup();
   o2VoltageSensor3->setup();
+
+  pinMode(BUDDY_LED_R_PIN, OUTPUT);
+  pinMode(BUDDY_LED_G_PIN, OUTPUT);
+  pinMode(BUDDY_LED_B_PIN, OUTPUT);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  pinMode(WET_CONTACT_PIN, INPUT_PULLDOWN);
+
+  pinMode(PIEZO_ELECTRIC_SWITCH_PIN, INPUT_PULLDOWN);
 }
 
-float generateRandom(float lower, float upper)
+void loop()
 {
-  float random = ((float)rand()) / (float)RAND_MAX;
-  float diff = upper - lower;
-  float r = random * diff;
-  return lower + r;
-}
-
-bool randomBool() {
-  return rand() > (RAND_MAX / 2);
-}
-
-class Voltage {
-public:
-  Voltage(float value) : _value(value), _reliable(isValid()) {}
-
-  bool isValid() const {
-    return _value >= 0 && _value <= 99.99;
-  }
-
-  bool isReliable() const {
-    return _reliable;
-  }
-
-  void setReliable(bool reliability) {
-    _reliable = reliability;
-  }
-
-  float getValue() const {
-    return _value;
-  }
-
-private:
-  float _value;
-  bool _reliable;
-};
-
-
-float calculateAverage(Voltage& voltage1, Voltage& voltage2, Voltage& voltage3) {
-  // Initialize an array to hold the valid voltages
-  Voltage* validVoltages[3];
-  int validCount = 0;
-
-  // Add the valid voltages to the array
-  if(voltage1.isValid()) validVoltages[validCount++] = &voltage1;
-  if(voltage2.isValid()) validVoltages[validCount++] = &voltage2;
-  if(voltage3.isValid()) validVoltages[validCount++] = &voltage3;
-
-  // If there are no valid voltages, return an error value
-  if(validCount == 0) return -1;
-
-  // If there's only one valid voltage, return it
-  if(validCount == 1) return validVoltages[0]->getValue();
-
-  // Sort the valid voltages in ascending order
-  for(int i = 0; i < validCount; i++) {
-    for(int j = i + 1; j < validCount; j++) {
-      if(validVoltages[i]->getValue() > validVoltages[j]->getValue()) {
-        Voltage* temp = validVoltages[i];
-        validVoltages[i] = validVoltages[j];
-        validVoltages[j] = temp;
-      }
-    }
-  }
-
-  // If there are two valid voltages, return their average
-  if(validCount == 2) return (validVoltages[0]->getValue() + validVoltages[1]->getValue()) / 2;
-
-  // If there are three valid voltages, calculate the average of the two closest
-  float avgClosest = (validVoltages[0]->getValue() + validVoltages[1]->getValue()) / 2;
-
-  // If the farthest voltage deviates from the average of the two closest by less than 0.2, include it in the average
-  if(abs(validVoltages[2]->getValue() - avgClosest) < 0.2) {
-    validVoltages[2]->setReliable(true);
-    return (validVoltages[0]->getValue() + validVoltages[1]->getValue() + validVoltages[2]->getValue()) / 3;
-  } else {
-    return avgClosest;
-  }
-}
-
-#define ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL 1.01325 // SW does 1016mb
-
-float calibrationVoltage = 52.5;
-
-float getPPO2FromVoltage(float currentCellVoltage) {
-  return ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL * currentCellVoltage / calibrationVoltage;
-}
-
-void loop() {
   o2VoltageSensor1->loop();
   o2VoltageSensor2->loop();
   o2VoltageSensor3->loop();
@@ -134,65 +162,72 @@ void loop() {
   float o2Sensor2Voltage = o2VoltageSensor2->read();
   float o2Sensor3Voltage = o2VoltageSensor3->read();
 
-  Voltage voltage1(o2Sensor1Voltage);
-  Voltage voltage2(o2Sensor2Voltage);
-  Voltage voltage3(o2Sensor3Voltage);
+  // rtcTime.serialPrintDateTime();
+  // Serial.print(" - ");
 
-  float avgVoltage = calculateAverage(voltage1, voltage2, voltage3);
-  
-  display.showReliantSensors(voltage1.isReliable(), voltage2.isReliable(), voltage3.isReliable());
+  // Serial.print("(");
+  // Serial.print(o2Sensor1Voltage);
+  // Serial.print(")");
 
-  rtcTime.serialPrintDateTime();
-  Serial.print(" - ");
-  Serial.print("(");
-  Serial.print(o2Sensor1Voltage);
-  if (voltage1.isReliable()) {
-    Serial.print(" ✅");
-  }
-  if (!voltage1.isReliable()) {
-    Serial.print(" ❌");
-  }
-  Serial.print(")");
-  Serial.print(" ");
-  Serial.print("(");
-  Serial.print(o2Sensor2Voltage);
-  if (voltage2.isReliable()) {
-    Serial.print(" ✅");
-  }
-  if (!voltage2.isReliable()) {
-    Serial.print(" ❌");
-  }
-  Serial.print(")");
-  Serial.print(" ");
-  Serial.print("(");
-  Serial.print(o2Sensor3Voltage);
-  if (voltage3.isReliable()) {
-    Serial.print(" ✅");
-  }
-  if (!voltage3.isReliable()) {
-    Serial.print(" ❌");
-  }
-  Serial.print(")");
-  Serial.print(" - Average: ");
-  Serial.println(avgVoltage);
+  // Serial.print(" ");
 
-  // display.showPPO2(
-  //   avgVoltage,
-  //   o2Sensor2Voltage,
-  //   o2Sensor3Voltage
-  // );
+  // Serial.print("(");
+  // Serial.print(o2Sensor2Voltage);
+  // Serial.print(")");
 
-  // display.showReliantSensors(
-  //   voltage1.isReliable(),
-  //   voltage2.isReliable(),
-  //   voltage3.isReliable()
-  // );
+  // Serial.print(" ");
 
-   display.showPPO2v2(
-    getPPO2FromVoltage(o2Sensor1Voltage),
-    getPPO2FromVoltage(o2Sensor2Voltage),
-    getPPO2FromVoltage(o2Sensor3Voltage)
-  );
+  // Serial.print("(");
+  // Serial.print(o2Sensor3Voltage);
+  // Serial.println(")");
+
+  display.showPPO2(
+      getPPO2FromVoltage(o2Sensor1Voltage),
+      getPPO2FromVoltage(o2Sensor2Voltage),
+      getPPO2FromVoltage(o2Sensor3Voltage));
+
+  // ---
+
+  boolean isWet = digitalRead(WET_CONTACT_PIN) == HIGH;
+
+  if (isWet) {
+    analogWrite(BUDDY_LED_R_PIN, 0);
+    analogWrite(BUDDY_LED_G_PIN, 0);
+    analogWrite(BUDDY_LED_B_PIN, 255);
+  } else {
+    analogWrite(BUDDY_LED_R_PIN, 255);
+    analogWrite(BUDDY_LED_G_PIN, 0);
+    analogWrite(BUDDY_LED_B_PIN, 0);
+  }
+
+  // ----
+
+  boolean isPiezoActive = digitalRead(PIEZO_ELECTRIC_SWITCH_PIN) == HIGH;
+
+  if (isPiezoActive) {
+    digitalWrite(BUZZER_PIN, HIGH);
+  } else {
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+
+  // ----
 
   display.loop();
+
+  // ----
+
+  scheduler.execute();
+
+  // ----
+
+  unsigned long start = millis();
+  button.check();
+
+  // check on performance in milliseconds
+  unsigned long duration = millis() - start;
+  if (duration > 10)
+  {
+    Serial.print("duration: ");
+    Serial.println(duration);
+  }
 }

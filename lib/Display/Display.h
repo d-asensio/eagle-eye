@@ -19,16 +19,10 @@ class Display {
   bool isAvailable();
 
   void showPPO2(float sensor1ppO2, float sensor2ppO2, float sensor3ppO2);
-  void showPPO2v2(float sensor1ppO2, float sensor2ppO2, float sensor3ppO2);
-  void showReliantSensors(boolean sensor1IsReliant, boolean sensor2IsReliant, boolean sensor3IsReliant);
   void showDisplayMessage(String message);
-  void showDisplayGasInformation(float o2SensorVoltage, float percentageO2);
-
 
   private:
   bool _isAvailable;
-  int _direction;
-  int _x; 
 
   Adafruit_SSD1306 *_display;
   logging::Logger *_logger;
