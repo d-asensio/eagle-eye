@@ -33,7 +33,7 @@ bool Display::isAvailable()
   return _isAvailable;
 }
 
-void Display::showSensorPPO2(float ppO2, uint8_t sensorChannel)
+void Display::showSensorPPO2(float ppO2, uint8_t sensorChannel, bool showWetSymbol)
 {
   if (!isAvailable())
     return;
@@ -53,6 +53,12 @@ void Display::showSensorPPO2(float ppO2, uint8_t sensorChannel)
   _display->fillRect(SCREEN_WIDTH - 13, SCREEN_HEIGHT - 17, 13, 17, WHITE);
   _display->setCursor(SCREEN_WIDTH - 12, SCREEN_HEIGHT - 4);
   _display->print(sensorChannel);
+
+  // Drop
+  if (showWetSymbol) {
+    _display->drawBitmap(SCREEN_WIDTH - WATER_DROP_WIDTH, 0, water_drop_bmp, WATER_DROP_WIDTH, WATER_DROP_HEIGHT, WHITE);
+  }
+
   _display->display();
 }
 
