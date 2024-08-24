@@ -51,19 +51,16 @@ void O2VoltageSensor::_readChannel()
 
   if (_channel == 0)
   {
-
     _lastReading = _ads->readADC_Differential_0_3();
   }
 
   if (_channel == 1)
   {
-
     _lastReading = _ads->readADC_Differential_1_3();
   }
 
   if (_channel == 2)
   {
-
     _lastReading = _ads->readADC_Differential_2_3();
   }
 }

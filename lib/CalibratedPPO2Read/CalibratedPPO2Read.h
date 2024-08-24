@@ -7,14 +7,14 @@
 
 class CalibratedPPO2Read {
 public:
-    CalibratedPPO2Read(O2VoltageSensor* sensor);
+    CalibratedPPO2Read(O2VoltageSensor* sensor, float* calibrationReferenceVoltage);
 
     void takeCalibrationReference();
     float getPPO2();
 
 private:
     O2VoltageSensor* _sensor;
-    float _calibrationReferenceVoltage;
+    float* _calibrationReferenceVoltage;
 };
 
 #endif

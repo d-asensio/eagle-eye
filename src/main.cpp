@@ -4,34 +4,27 @@
 #include <logger.h>
 #include <TaskScheduler.h>
 
-#include <RTClib.h>
 #include <Adafruit_ADS1X15.h>
 
 #include <AceButton.h>
-#include "driver/touch_sensor.h"
 
 #include "Display.h"
-#include "RTCTime.h"
 
 #include "ISensor.h"
 #include "O2VoltageSensor.h"
 #include "CalibratedPPO2Read.h"
 
-#define ATMOSPHERIC_PRESSURE_AT_SEA_LEVEL (1.01325) // SW does 1.016mb
-
 #define BUDDY_LIGHT_LOW_PPO2_THRESHOLD (0.4)
 #define BUDDY_LIGHT_HIGH_PPO2_THRESHOLD (1.6)
 
-#define BUDDY_LED_R_PIN (GPIO_NUM_18)
-#define BUDDY_LED_G_PIN (GPIO_NUM_19)
-#define BUDDY_LED_B_PIN (GPIO_NUM_17)
+#define BUDDY_LED_R_PIN (GPIO_NUM_3)
+#define BUDDY_LED_G_PIN (GPIO_NUM_2)
+#define BUDDY_LED_B_PIN (GPIO_NUM_4)
 
-#define WET_CONTACT_PIN (GPIO_NUM_15)
-#define BUTTON_SWITCH_PIN (GPIO_NUM_2)
+#define WET_CONTACT_PIN (GPIO_NUM_0)
+#define BUTTON_SWITCH_PIN (GPIO_NUM_1)
 
-#define WAKE_UP_BITMASK 0x8004
-
-#define BUZZER_PIN (GPIO_NUM_25)
+#define BUZZER_PIN (GPIO_NUM_10)
 
 using namespace ace_button;
 
@@ -42,17 +35,18 @@ AceButton button;
 
 Display display(&logger);
 
-RTC_DS3231 rtc;
-RTCTime rtcTime(&logger, &rtc);
-
 Adafruit_ADS1115 ads;
 ISensor<float> *o2VoltageSensor1 = new O2VoltageSensor(&logger, &ads, 0);
 ISensor<float> *o2VoltageSensor2 = new O2VoltageSensor(&logger, &ads, 1);
 ISensor<float> *o2VoltageSensor3 = new O2VoltageSensor(&logger, &ads, 2);
 
-CalibratedPPO2Read *calibratedPPO2Read1 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor1);
-CalibratedPPO2Read *calibratedPPO2Read2 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor2);
-CalibratedPPO2Read *calibratedPPO2Read3 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor3);
+RTC_DATA_ATTR float calibrationReferenceVoltage1 = 52.5;
+RTC_DATA_ATTR float calibrationReferenceVoltage2 = 52.5;
+RTC_DATA_ATTR float calibrationReferenceVoltage3 = 52.5;
+
+CalibratedPPO2Read *calibratedPPO2Read1 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor1, &calibrationReferenceVoltage1);
+CalibratedPPO2Read *calibratedPPO2Read2 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor2, &calibrationReferenceVoltage2);
+CalibratedPPO2Read *calibratedPPO2Read3 = new CalibratedPPO2Read((O2VoltageSensor*)o2VoltageSensor3, &calibrationReferenceVoltage3);
 
 uint8_t displaySensorChannel = 1;
 
@@ -61,6 +55,7 @@ boolean isWet = false;
 namespace LEDColor {
   const unsigned long Black = 0x000000;
   const unsigned long Red = 0xFF0000;
+  const unsigned long Green = 0x00FF00;
   const unsigned long Orange = 0xFFA500;
 
   void displayColor(unsigned long color) {
@@ -105,7 +100,7 @@ Task ppO2Alert(TASK_IMMEDIATE, TASK_FOREVER, []() {
   float ppo2_3 = calibratedPPO2Read3->getPPO2();
 
   if (ppo2_1 < BUDDY_LIGHT_LOW_PPO2_THRESHOLD || ppo2_2 < BUDDY_LIGHT_LOW_PPO2_THRESHOLD || ppo2_3 < BUDDY_LIGHT_LOW_PPO2_THRESHOLD) {
-    LEDColor::displayColor(LEDColor::Orange);
+    LEDColor::displayColor(LEDColor::Red);
     return;
   }
   
@@ -114,7 +109,7 @@ Task ppO2Alert(TASK_IMMEDIATE, TASK_FOREVER, []() {
     return;
   }
 
-  LEDColor::displayColor(LEDColor::Black);
+  LEDColor::displayColor(LEDColor::Green);
 }, &scheduler, true);
 
 void calibrationNotPossible() {
@@ -146,6 +141,13 @@ void turnOff() {
     calibrationNotPossible();
     return;
   }
+
+  // Kepping LED off during deep sleep
+  LEDColor::displayColor(LEDColor::Black);
+  gpio_hold_en(BUDDY_LED_R_PIN);
+  gpio_hold_en(BUDDY_LED_G_PIN);
+  gpio_hold_en(BUDDY_LED_B_PIN);
+  gpio_deep_sleep_hold_en();
 
   display.showCenteredMessage("Bye");  
   delay(1500);
@@ -248,7 +250,6 @@ void setup()
   // --
 
   display.setup();
-  rtcTime.setup();
 
   o2VoltageSensor1->setup();
   o2VoltageSensor2->setup();
@@ -276,11 +277,18 @@ void setup()
 
   // ---
 
-  esp_sleep_enable_ext0_wakeup(WET_CONTACT_PIN, HIGH);
+  esp_deep_sleep_enable_gpio_wakeup((1 << BUTTON_SWITCH_PIN) | (1 << WET_CONTACT_PIN), ESP_GPIO_WAKEUP_GPIO_HIGH);
+
+  // Disable hold on LED after deep sleep, to be able to control it again
+  gpio_hold_dis(BUDDY_LED_R_PIN);
+  gpio_hold_dis(BUDDY_LED_G_PIN);
+  gpio_hold_dis(BUDDY_LED_B_PIN);
 
   // ---
 
   scheduler.startNow();
 }
 
-void loop() { scheduler.execute(); }
+void loop() { 
+  scheduler.execute();
+}
